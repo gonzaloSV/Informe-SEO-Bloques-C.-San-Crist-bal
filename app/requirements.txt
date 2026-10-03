@@ -1,5 +1,9 @@
-streamlit==1.50.0
-altair>=5.4,<6
+# Python 3.9 (el que trae macOS)
+streamlit==1.50.0; python_version < "3.10"
+altair>=5.4,<6; python_version < "3.10"
+# Python 3.10 o superior (Streamlit Cloud)
+streamlit>=1.55; python_version >= "3.10"
+altair>=6; python_version >= "3.10"
 pandas>=2.0
 google-api-python-client>=2.100
 google-auth>=2.20
