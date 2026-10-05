@@ -80,6 +80,14 @@ def load_paths(site):
     return core.load_site_paths(site)
 
 
+def show_chart(chart):
+    """Compatible con Streamlit antiguo (use_container_width) y nuevo (width)."""
+    try:
+        st.altair_chart(chart, width="stretch")
+    except TypeError:
+        st.altair_chart(chart, use_container_width=True)
+
+
 # ---------- Formato ----------
 
 def fmt_int(n):
@@ -221,7 +229,7 @@ def block_section(cmp, has_prev, labels):
             )
             .properties(height=260)
         )
-        st.altair_chart(chart, use_container_width=True)
+        show_chart(chart)
     with right:
         share_rows = []
         for medida, col in (("Impresiones", "impressions"), ("Clics", "clicks")):
@@ -243,7 +251,7 @@ def block_section(cmp, has_prev, labels):
             )
             .properties(height=alt.Step(40))
         )
-        st.altair_chart(donut, use_container_width=True)
+        show_chart(donut)
 
     table(cmp, {
         "bloque": "Bloque", "clicks": "Clics", "clicks_prev": "Clics ant.", "d_clicks": "Δ clics",
@@ -294,7 +302,7 @@ def detail_section(cur_df, prev_df, has_prev):
                 )
                 .properties(height=max(180, 28 * len(pages)))
             )
-            st.altair_chart(bar, use_container_width=True)
+            show_chart(bar)
             table(pages, cols_page, has_prev)
             st.markdown("**Consultas de captación**")
             table(by_query("Captación"), cols_query, has_prev, height=420)
