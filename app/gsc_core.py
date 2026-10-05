@@ -223,6 +223,32 @@ def classify(df: pd.DataFrame, brand_terms, platform_terms, site_paths) -> pd.Da
     return df
 
 
+# ---------- Intención de búsqueda ----------
+
+INTENCIONES = ["Transaccional", "Comercial", "Informativa"]
+
+# Quien busca esto quiere apuntarse o pagar
+_TRANSACCIONAL = re.compile(
+    r"matricul|inscrib|plazas?\b|precio|cuanto cuesta|cuesta|coste|tarifa|requisito|plazo|"
+    r"admision|solicitud|reserva|apuntar|contacto|telefono|horario|cuando empieza|inicio de curso"
+)
+# Quien busca esto quiere informarse, todavía no está eligiendo centro
+_INFORMATIVA = re.compile(
+    r"\bque es\b|salidas|sueldo|cobra|\bgana\b|para que sirve|diferencia|temario|asignaturas|"
+    r"funciones|\bque hace\b|como ser|es grado medio o superior|\bque estudiar\b|significado|wikipedia"
+)
+
+
+def intent(query: str) -> str:
+    """Transaccional > Informativa > Comercial (el resto: busca un ciclo o un centro)."""
+    q = strip_accents(str(query).lower())
+    if _TRANSACCIONAL.search(q):
+        return "Transaccional"
+    if _INFORMATIVA.search(q):
+        return "Informativa"
+    return "Comercial"
+
+
 # ---------- Agregados ----------
 
 def aggregate(df: pd.DataFrame, by) -> pd.DataFrame:
@@ -268,4 +294,6 @@ def run_analysis(service, site, start, end, brand_terms, platform_terms, site_pa
     """Descarga, limpia y clasifica un periodo."""
     site_paths = site_paths if site_paths is not None else load_site_paths(site)
     raw = fetch(service, site, start, end)
-    return classify(clean(raw), brand_terms, platform_terms, site_paths)
+    df = classify(clean(raw), brand_terms, platform_terms, site_paths)
+    df["intencion"] = df["query"].map(intent) if not df.empty else pd.Series(dtype=str)
+    return df

@@ -266,8 +266,107 @@ def short_path(url):
     return p if len(p) <= 70 else p[:67] + "…"
 
 
+def url_section(cur_df, prev_df, has_prev):
+    """Palabras clave de una URL concreta, con las páginas ordenadas por importancia."""
+    from urllib.parse import urlparse
+
+    st.caption("Elige una página del desplegable (ordenadas por clics y, a igualdad, por impresiones) "
+               "o pega una URL. Por defecto solo se muestran búsquedas de captación con intención comercial o transaccional.")
+    c1, c2, c3 = st.columns([3, 3, 2])
+    blocks = c1.multiselect("Bloques", core.BLOQUES, default=["Captación"], key="url_blocks")
+    intents = c2.multiselect("Intención", core.INTENCIONES, default=["Transaccional", "Comercial"], key="url_intents",
+                             help="Transaccional: matrícula, precio, plazas, requisitos… "
+                                  "Comercial: busca un ciclo o un centro. Informativa: salidas, sueldo, qué es…")
+    order_by = c3.radio("Ordenar por", ["Clics", "Impresiones"], key="url_order")
+
+    def filt(df):
+        if df is None:
+            return None
+        return df[df["bloque"].isin(blocks) & df["intencion"].isin(intents)]
+
+    cur_f, prev_f = filt(cur_df), filt(prev_df)
+    pages = core.aggregate(cur_f, "page")
+    if pages.empty:
+        st.info("No hay búsquedas con esos filtros en el periodo.")
+        return
+    pages = pages.sort_values(["clicks", "impressions"], ascending=False)
+    labels = {r.page: f"{short_path(r.page)}   ·   {fmt_int(r.clicks)} clics · {fmt_int(r.impressions)} impr."
+              for r in pages.itertuples()}
+
+    sel_col, url_col = st.columns([3, 2])
+    page = sel_col.selectbox(f"Página ({len(pages)} con búsquedas)", pages["page"].tolist(),
+                             format_func=lambda u: labels.get(u, u), key="url_select")
+    manual = url_col.text_input("…o pega una URL", key="url_manual",
+                                placeholder="https://fpsancristobal.es/ciclo-fp-dietetica/")
+    if manual.strip():
+        path = (urlparse(manual.strip()).path or manual.strip()).split("#")[0].rstrip("/") or "/"
+        found = [u for u in cur_df["page"].unique() if ((urlparse(u).path.rstrip("/")) or "/") == path]
+        if not found:
+            st.warning("Esa URL no tiene búsquedas en este periodo. Revisa que pertenezca a la web seleccionada.")
+            return
+        page = found[0]
+
+    cur_p = cur_f[cur_f["page"] == page]
+    prev_p = prev_f[prev_f["page"] == page] if prev_f is not None else None
+    st.markdown(f"**[{page}]({page})**")
+    if cur_p.empty:
+        st.info("Esta página no tiene búsquedas con los filtros elegidos. Prueba a añadir bloques o intenciones.")
+        return
+
+    t = core.totals(cur_p)
+    tp = core.totals(prev_p) if prev_p is not None and not prev_p.empty else None
+    m = st.columns(5)
+    m[0].metric("Clics", fmt_int(t["clicks"]), None if tp is None else fmt_delta(t["clicks"] - tp["clicks"]))
+    m[1].metric("Impresiones", fmt_int(t["impressions"]),
+                None if tp is None else fmt_delta(t["impressions"] - tp["impressions"]))
+    m[2].metric("CTR", fmt_pct(t["ctr"]))
+    m[3].metric("Posición media", fmt_pos(t["position"]),
+                None if tp is None else f"{t['position'] - tp['position']:+.1f}".replace(".", ","), delta_color="inverse")
+    m[4].metric("Palabras clave", fmt_int(cur_p["query"].nunique()))
+
+    q = core.compare(cur_p, prev_p, ["query", "intencion"])
+    q = q[q["impressions"] > 0]
+    key = "clicks" if order_by == "Clics" else "impressions"
+    q = q.sort_values([key, "impressions" if key == "clicks" else "clicks"], ascending=False)
+
+    def kw_chart(data, field, title, color):
+        data = data[data[field] > 0].sort_values(field, ascending=False).head(15)
+        if data.empty:
+            st.caption(f"{title}: sin datos en este periodo.")
+            return
+        chart = (
+            alt.Chart(data, title=title)
+            .mark_bar(color=color, cornerRadiusEnd=3)
+            .encode(
+                y=alt.Y("query:N", sort="-x", title=None, axis=alt.Axis(labelLimit=260, labelOverlap=False)),
+                x=alt.X(f"{field}:Q", title=None, axis=alt.Axis(tickMinStep=1)),
+                tooltip=[alt.Tooltip("query:N", title="Palabra clave"),
+                         alt.Tooltip("impressions:Q", title="Impresiones", format=","),
+                         alt.Tooltip("clicks:Q", title="Clics"),
+                         alt.Tooltip("position:Q", title="Posición", format=".1f")],
+            )
+            .properties(height=max(180, 30 * len(data)))
+        )
+        show_chart(chart)
+
+    g1, g2 = st.columns(2)
+    with g1:
+        kw_chart(q, "impressions", "Más impresiones (vistas)", "#e9a15c")
+    with g2:
+        kw_chart(q, "clicks", "Más clics", COLORS["Captación"])
+
+    table(q, {"query": "Palabra clave", "intencion": "Intención", "clicks": "Clics", "d_clicks": "Δ clics",
+              "impressions": "Impresiones", "d_impressions": "Δ impr.", "ctr": "CTR",
+              "position": "Posición", "d_position": "Δ pos."}, has_prev, height=min(600, 38 * (len(q) + 1)))
+    export = q.rename(columns={"query": "palabra_clave", "clicks": "clics", "impressions": "impresiones",
+                               "position": "posicion"})
+    st.download_button("Descargar palabras clave de esta URL (CSV)", export.to_csv(index=False).encode("utf-8-sig"),
+                       file_name=f"keywords_{short_path(page).strip('/').replace('/', '_') or 'home'}.csv",
+                       mime="text/csv", key="url_dl")
+
+
 def detail_section(cur_df, prev_df, has_prev):
-    tabs = st.tabs(["Captación", "Oportunidades", "Blog", "Marca", "Plataformas alumnos"])
+    tabs = st.tabs(["Palabras clave por URL", "Captación", "Oportunidades", "Blog", "Marca", "Plataformas alumnos"])
     cols_page = {"pagina": "Página", "clicks": "Clics", "d_clicks": "Δ clics", "impressions": "Impresiones",
                  "d_impressions": "Δ impr.", "ctr": "CTR", "position": "Posición", "d_position": "Δ pos."}
     cols_query = {"query": "Consulta", "clicks": "Clics", "d_clicks": "Δ clics", "impressions": "Impresiones",
@@ -287,6 +386,9 @@ def detail_section(cur_df, prev_df, has_prev):
         return c[c["impressions"] > 0].sort_values("impressions", ascending=False).head(n)
 
     with tabs[0]:
+        url_section(cur_df, prev_df, has_prev)
+
+    with tabs[1]:
         pages = by_page("Captación")
         if pages.empty:
             st.info("Sin búsquedas de captación en este periodo.")
@@ -307,7 +409,7 @@ def detail_section(cur_df, prev_df, has_prev):
             st.markdown("**Consultas de captación**")
             table(by_query("Captación"), cols_query, has_prev, height=420)
 
-    with tabs[1]:
+    with tabs[2]:
         st.caption("Consultas de captación entre las posiciones 4 y 20, ordenadas por impresiones: "
                    "las que más rápido pueden ganar clics al subir a primera página.")
         opp = core.compare(part(cur_df, "Captación"), part(prev_df, "Captación"), ["query", "page"])
@@ -320,7 +422,7 @@ def detail_section(cur_df, prev_df, has_prev):
             table(opp, {"query": "Consulta", "pagina": "Página", **{k: v for k, v in cols_query.items() if k != "query"}},
                   has_prev, height=520)
 
-    with tabs[2]:
+    with tabs[3]:
         pages = by_page("Blog")
         if pages.empty:
             st.info("Sin búsquedas genéricas que lleguen al blog en este periodo.")
@@ -329,11 +431,11 @@ def detail_section(cur_df, prev_df, has_prev):
             st.markdown("**Consultas que llegan al blog**")
             table(by_query("Blog", 20), cols_query, has_prev)
 
-    with tabs[3]:
+    with tabs[4]:
         q = by_query("Marca", 20)
         st.info("Sin búsquedas de marca.") if q.empty else table(q, cols_query, has_prev)
 
-    with tabs[4]:
+    with tabs[5]:
         q = by_query("Plataformas alumnos", 20)
         st.info("Sin búsquedas de plataformas.") if q.empty else table(q, cols_query, has_prev)
 
