@@ -6,6 +6,7 @@ App de Streamlit que lee Search Console y clasifica las búsquedas en cuatro blo
 - Fechas libres. Por defecto, el mes anterior completo.
 - Comparación con el periodo anterior, con el mismo periodo del año pasado o sin comparar.
 - KPIs con variación, gráficos por bloque, páginas y consultas de cada bloque, oportunidades (posiciones 4-20) y descarga en CSV.
+- Botón al pie para descargar el informe completo en PDF (resumen, KPIs, gráficos y tablas por bloque).
 - Acceso protegido con contraseña.
 
 ## Archivos
@@ -14,6 +15,7 @@ App de Streamlit que lee Search Console y clasifica las búsquedas en cuatro blo
 |---|---|
 | `app.py` | La interfaz |
 | `gsc_core.py` | Descarga, limpieza y clasificación |
+| `informe_pdf.py` | Genera el informe en PDF |
 | `requirements.txt` | Dependencias |
 | `make_secrets.py` | Genera los secretos a partir de `credentials.json` |
 | `.streamlit/config.toml` | Colores de la app |

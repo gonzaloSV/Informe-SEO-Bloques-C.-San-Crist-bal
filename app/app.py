@@ -17,6 +17,7 @@ import pandas as pd
 import streamlit as st
 
 import gsc_core as core
+import informe_pdf
 
 st.set_page_config(page_title="SEO San Cristóbal", page_icon="📈", layout="wide")
 
@@ -78,6 +79,11 @@ def load_period(site, start, end, brand, platforms):
 @st.cache_data(ttl=86400, show_spinner=False)
 def load_paths(site):
     return core.load_site_paths(site)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def build_pdf(site, cur_label, prev_label, cur_df, prev_df):
+    return informe_pdf.build_report(site, cur_label, prev_label, cur_df, prev_df)
 
 
 def show_chart(chart):
@@ -486,10 +492,21 @@ def main():
     detail_section(cur_df, prev_df, has_prev)
 
     st.divider()
+    domain = core.property_domain(site)
     export = cur_df.rename(columns={"page": "pagina", "query": "consulta", "clicks": "clics",
                                     "impressions": "impresiones", "position": "posicion"})
-    st.download_button("Descargar datos del periodo (CSV)", export.to_csv(index=False).encode("utf-8-sig"),
-                       file_name=f"gsc_{core.property_domain(site)}_{start}_{end}.csv", mime="text/csv")
+    pdf_col, csv_col = st.columns(2)
+    with pdf_col:
+        try:
+            with st.spinner("Preparando el PDF…"):
+                pdf = build_pdf(site, cur_label, prev_label, cur_df, prev_df)
+            st.download_button("Descargar informe (PDF)", pdf, file_name=f"informe-seo_{domain}_{start}_{end}.pdf",
+                               mime="application/pdf", type="primary", width="stretch")
+        except Exception as e:
+            st.error(f"No se ha podido generar el PDF: {e}")
+    with csv_col:
+        st.download_button("Descargar datos del periodo (CSV)", export.to_csv(index=False).encode("utf-8-sig"),
+                           file_name=f"gsc_{domain}_{start}_{end}.csv", mime="text/csv", width="stretch")
     with st.expander("Cómo se clasifican las búsquedas"):
         st.markdown(
             "- **Plataformas alumnos**: la consulta contiene alguna plataforma de la lista (Moodle, Clickedu, aula virtual…).\n"
