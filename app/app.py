@@ -86,6 +86,11 @@ def build_pdf(site, cur_label, prev_label, cur_df, prev_df):
     return informe_pdf.build_report(site, cur_label, prev_label, cur_df, prev_df)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def build_url_pdf(site, page, cur_label, prev_label, cur_p, prev_p, blocks, intents, order_by):
+    return informe_pdf.build_url_report(site, page, cur_label, prev_label, cur_p, prev_p, blocks, intents, order_by)
+
+
 def show_chart(chart):
     """Compatible con Streamlit antiguo (use_container_width) y nuevo (width)."""
     try:
@@ -272,7 +277,7 @@ def short_path(url):
     return p if len(p) <= 70 else p[:67] + "…"
 
 
-def url_section(cur_df, prev_df, has_prev):
+def url_section(cur_df, prev_df, has_prev, ctx):
     """Palabras clave de una URL concreta, con las páginas ordenadas por importancia."""
     from urllib.parse import urlparse
 
@@ -366,12 +371,23 @@ def url_section(cur_df, prev_df, has_prev):
               "position": "Posición", "d_position": "Δ pos."}, has_prev, height=min(600, 38 * (len(q) + 1)))
     export = q.rename(columns={"query": "palabra_clave", "clicks": "clics", "impressions": "impresiones",
                                "position": "posicion"})
-    st.download_button("Descargar palabras clave de esta URL (CSV)", export.to_csv(index=False).encode("utf-8-sig"),
-                       file_name=f"keywords_{short_path(page).strip('/').replace('/', '_') or 'home'}.csv",
-                       mime="text/csv", key="url_dl")
+    slug = short_path(page).strip("/").replace("/", "_").replace("…", "") or "home"
+    pdf_col, csv_col = st.columns(2)
+    with pdf_col:
+        try:
+            with st.spinner("Preparando el PDF de esta URL…"):
+                pdf = build_url_pdf(ctx["site"], page, ctx["cur_label"], ctx["prev_label"], cur_p, prev_p,
+                                    tuple(blocks), tuple(intents), order_by)
+            st.download_button("Descargar informe de esta URL (PDF)", pdf, file_name=f"keywords_{slug}.pdf",
+                               mime="application/pdf", type="primary", key="url_pdf", width="stretch")
+        except Exception as e:
+            st.error(f"No se ha podido generar el PDF: {e}")
+    with csv_col:
+        st.download_button("Descargar palabras clave de esta URL (CSV)", export.to_csv(index=False).encode("utf-8-sig"),
+                           file_name=f"keywords_{slug}.csv", mime="text/csv", key="url_dl", width="stretch")
 
 
-def detail_section(cur_df, prev_df, has_prev):
+def detail_section(cur_df, prev_df, has_prev, ctx):
     tabs = st.tabs(["Palabras clave por URL", "Captación", "Oportunidades", "Blog", "Marca", "Plataformas alumnos"])
     cols_page = {"pagina": "Página", "clicks": "Clics", "d_clicks": "Δ clics", "impressions": "Impresiones",
                  "d_impressions": "Δ impr.", "ctr": "CTR", "position": "Posición", "d_position": "Δ pos."}
@@ -392,7 +408,7 @@ def detail_section(cur_df, prev_df, has_prev):
         return c[c["impressions"] > 0].sort_values("impressions", ascending=False).head(n)
 
     with tabs[0]:
-        url_section(cur_df, prev_df, has_prev)
+        url_section(cur_df, prev_df, has_prev, ctx)
 
     with tabs[1]:
         pages = by_page("Captación")
@@ -489,7 +505,7 @@ def main():
     cmp = core.compare(cur_df, prev_df, "bloque")
     block_section(cmp, has_prev, [cur_label, prev_label] if has_prev else [cur_label])
     st.divider()
-    detail_section(cur_df, prev_df, has_prev)
+    detail_section(cur_df, prev_df, has_prev, {"site": site, "cur_label": cur_label, "prev_label": prev_label})
 
     st.divider()
     domain = core.property_domain(site)
