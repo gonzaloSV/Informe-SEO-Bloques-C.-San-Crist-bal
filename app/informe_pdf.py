@@ -19,7 +19,7 @@ from reportlab.lib.enums import TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.platypus import KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import CondPageBreak, KeepTogether, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 import gsc_core as core
 
@@ -113,40 +113,50 @@ def colored(text, good):
 
 # ---------- Piezas ----------
 
+def d_rel(a, b):
+    ch = rel_change(a, b)
+    return None if ch is None else (("+" if ch > 0 else "") + fmt_pct(ch, 1), ch > 0 if ch else None)
+
+
+def d_pp(a, b):
+    d = (a - b) * 100
+    return f"{d:+.2f}".replace(".", ",") + " p.p.", (d > 0 if d else None)
+
+
+def d_pos(a, b):
+    if not a or not b:
+        return None
+    d = a - b
+    if abs(d) < 0.05:
+        return "0,0", None
+    return f"{d:+.1f}".replace(".", ","), d < 0  # bajar de posición es mejorar
+
+
+def d_abs(a, b):
+    d = a - b
+    return fmt_signed(d), (d > 0 if d else None)
+
+
 def kpi_boxes(cur_df, prev_df):
     t = core.totals(cur_df)
     p = core.totals(prev_df) if prev_df is not None else None
     capt = core.totals(cur_df[cur_df["bloque"] == "Captación"])
     capt_p = core.totals(prev_df[prev_df["bloque"] == "Captación"]) if prev_df is not None else None
+    return kpi_table([
+        ("Clics", fmt_int(t["clicks"]), p and d_rel(t["clicks"], p["clicks"])),
+        ("Impresiones", fmt_int(t["impressions"]), p and d_rel(t["impressions"], p["impressions"])),
+        ("CTR", fmt_pct(t["ctr"]), p and d_pp(t["ctr"], p["ctr"])),
+        ("Posición media", fmt_pos(t["position"]), p and d_pos(t["position"], p["position"])),
+        ("Clics de captación", fmt_int(capt["clicks"]), capt_p and d_rel(capt["clicks"], capt_p["clicks"])),
+    ], prev_df is not None)
 
-    def rel(a, b):
-        ch = rel_change(a, b)
-        return None if ch is None else (("+" if ch > 0 else "") + fmt_pct(ch, 1), ch > 0 if ch else None)
 
-    def pp(a, b):
-        d = (a - b) * 100
-        return f"{d:+.2f}".replace(".", ",") + " p.p.", (d > 0 if d else None)
-
-    def pos(a, b):
-        if not a or not b:
-            return None
-        d = a - b
-        if abs(d) < 0.05:
-            return "0,0", None
-        return f"{d:+.1f}".replace(".", ","), d < 0  # bajar de posición es mejorar
-
-    items = [
-        ("Clics", fmt_int(t["clicks"]), p and rel(t["clicks"], p["clicks"])),
-        ("Impresiones", fmt_int(t["impressions"]), p and rel(t["impressions"], p["impressions"])),
-        ("CTR", fmt_pct(t["ctr"]), p and pp(t["ctr"], p["ctr"])),
-        ("Posición media", fmt_pos(t["position"]), p and pos(t["position"], p["position"])),
-        ("Clics de captación", fmt_int(capt["clicks"]), capt_p and rel(capt["clicks"], capt_p["clicks"])),
-    ]
+def kpi_table(items, has_prev):
     cells = []
     for label, value, delta in items:
-        d = colored(*delta) if delta else ("sin comparar" if prev_df is None else "–")
+        d = colored(*delta) if delta else ("–" if has_prev else "sin comparar")
         cells.append([P(label, "kpi_label"), P(value, "kpi_value"), P(d, "kpi_delta")])
-    tbl = Table([cells], colWidths=[CONTENT_W / 5] * 5)
+    tbl = Table([cells], colWidths=[CONTENT_W / len(items)] * len(items))
     tbl.setStyle(TableStyle([
         ("BOX", (0, 0), (-1, -1), 0.6, RULE),
         ("INNERGRID", (0, 0), (-1, -1), 0.6, RULE),
@@ -374,7 +384,7 @@ def build_report(site: str, cur_label: str, prev_label: str | None, cur_df: pd.D
     opp = core.compare(part(cur_df, "Captación"), part(prev_df, "Captación"), ["query", "page"])
     opp = opp[(opp["position"] >= 4) & (opp["position"] <= 20) & (opp["impressions"] > 0)]
     opp = opp.sort_values("impressions", ascending=False).head(20).copy()
-    story += [P("Oportunidades (posiciones 4 a 20)", "h2"),
+    story += [CondPageBreak(45 * mm), P("Oportunidades (posiciones 4 a 20)", "h2"),
               P("Búsquedas de captación que ya están cerca de la primera página. Subirlas unas posiciones "
                 "suele traer más clics que trabajar palabras clave nuevas.", "note"), Spacer(1, 5)]
     if opp.empty:
@@ -406,6 +416,10 @@ def build_report(site: str, cur_label: str, prev_label: str | None, cur_df: pd.D
           "Google los consolida.", "note"),
     ]
 
+    return render(story, f"Informe SEO · {domain} · {cur_label}", f"Informe SEO {domain} {cur_label}")
+
+
+def render(story, footer_text, title) -> bytes:
     def footer(canvas, doc):
         canvas.saveState()
         canvas.setStrokeColor(RULE)
@@ -413,13 +427,138 @@ def build_report(site: str, cur_label: str, prev_label: str | None, cur_df: pd.D
         canvas.line(MARGIN, 11 * mm, PAGE_W - MARGIN, 11 * mm)
         canvas.setFont("Helvetica", 7.5)
         canvas.setFillColor(MUTED)
-        canvas.drawString(MARGIN, 7 * mm, f"Informe SEO · {domain} · {cur_label}")
+        canvas.drawString(MARGIN, 7 * mm, footer_text)
         canvas.drawRightString(PAGE_W - MARGIN, 7 * mm, f"Página {doc.page}")
         canvas.restoreState()
 
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=MARGIN, rightMargin=MARGIN, topMargin=MARGIN,
-                            bottomMargin=18 * mm, title=f"Informe SEO {domain} {cur_label}",
-                            author="Informe SEO San Cristóbal")
+                            bottomMargin=18 * mm, title=title, author="Informe SEO San Cristóbal")
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
     return buf.getvalue()
+
+
+# ---------- Informe de una URL ----------
+
+def url_highlights(q, has_prev, all_cmp):
+    """q: palabras clave de la URL con impresiones en el periodo actual (ya filtradas)."""
+    out = []
+    clicked = q[q["clicks"] > 0].sort_values(["clicks", "impressions"], ascending=False)
+    if not clicked.empty:
+        r = clicked.iloc[0]
+        share = r["clicks"] / q["clicks"].sum()
+        out.append(f"La palabra clave que más clics trae es «{escape(r['query'])}»: {fmt_int(r['clicks'])} clics "
+                   f"({fmt_pct(share, 0)} del total de la página) en posición {fmt_pos(r['position'])}.")
+    else:
+        out.append("Ninguna palabra clave ha generado clics en el periodo con estos filtros.")
+
+    top3 = q[(q["position"] > 0) & (q["position"] <= 3)]
+    out.append(f"<b>{fmt_int(len(top3))}</b> de {fmt_int(len(q))} palabras clave están en el top 3 "
+               f"y suman {fmt_int(top3['clicks'].sum())} clics.")
+
+    near = q[(q["position"] >= 4) & (q["position"] <= 20)]
+    if not near.empty:
+        out.append(f"<b>{fmt_int(len(near))}</b> están entre las posiciones 4 y 20, con "
+                   f"{fmt_int(near['impressions'].sum())} impresiones. Son las primeras que conviene empujar "
+                   "con contenido y enlaces internos.")
+
+    no_ctr = q[(q["position"] > 0) & (q["position"] <= 10) & (q["clicks"] == 0) & (q["impressions"] >= 20)]
+    if not no_ctr.empty:
+        top = no_ctr.sort_values("impressions", ascending=False).head(3)["query"].map(lambda s: f"«{escape(s)}»")
+        out.append(f"{fmt_int(len(no_ctr))} salen en primera página con impresiones pero sin ningún clic "
+                   f"(por ejemplo {', '.join(top)}). Merece la pena revisar el title y la meta description.")
+
+    if has_prev:
+        new = q[(q["impressions_prev"] == 0) & (q["impressions"] > 0)]
+        lost = all_cmp[(all_cmp["impressions"] == 0) & (all_cmp["impressions_prev"] > 0)]
+        if len(new) or len(lost):
+            out.append(f"Aparecen {fmt_int(len(new))} palabras clave nuevas y dejan de aparecer {fmt_int(len(lost))} "
+                       "respecto al periodo de comparación.")
+    return out
+
+
+def build_url_report(site: str, page: str, cur_label: str, prev_label: str | None, cur_p: pd.DataFrame,
+                     prev_p: pd.DataFrame | None, blocks=(), intents=(), order_by: str = "Clics") -> bytes:
+    """cur_p / prev_p: filas de Search Console de esa URL, ya filtradas por bloque e intención."""
+    domain = core.property_domain(site)
+    has_prev = prev_p is not None
+    generated = datetime.now().strftime("%d/%m/%Y")
+    path = short_path(page, 90)
+
+    all_cmp = core.compare(cur_p, prev_p, ["query", "intencion"])
+    q = all_cmp[all_cmp["impressions"] > 0].copy()
+    key = "clicks" if order_by == "Clics" else "impressions"
+    q = q.sort_values([key, "impressions" if key == "clicks" else "clicks"], ascending=False)
+
+    t = core.totals(cur_p)
+    tp = core.totals(prev_p) if has_prev and not prev_p.empty else None
+    kw_prev = None
+    if has_prev:
+        n_prev = int((all_cmp["impressions_prev"] > 0).sum())
+        kw_prev = d_abs(len(q), n_prev)
+
+    filtros = f"Bloques: {', '.join(blocks) or 'todos'} · Intención: {', '.join(intents) or 'todas'}"
+    story = [
+        P("Palabras clave de la página", "title"),
+        Spacer(1, 3),
+        P(f'<link href="{escape(page)}" color="#0f6b5c"><b>{escape(page)}</b></link>', "meta"),
+        P(f"{cur_label}" + (f" · comparado con {prev_label}" if prev_label else "")
+          + f"<br/>{escape(filtros)}<br/>Datos de Google Search Console · generado el {generated}", "meta"),
+        Spacer(1, 12),
+        kpi_table([
+            ("Clics", fmt_int(t["clicks"]), tp and d_abs(t["clicks"], tp["clicks"])),
+            ("Impresiones", fmt_int(t["impressions"]), tp and d_abs(t["impressions"], tp["impressions"])),
+            ("CTR", fmt_pct(t["ctr"]), tp and d_pp(t["ctr"], tp["ctr"])),
+            ("Posición media", fmt_pos(t["position"]), tp and d_pos(t["position"], tp["position"])),
+            ("Palabras clave", fmt_int(len(q)), kw_prev),
+        ], has_prev),
+        P("Lo más destacado", "h2"),
+    ]
+    story += [Paragraph(h, S["bullet"], bulletText="•") for h in url_highlights(q, has_prev, all_cmp)]
+
+    legend = [cur_label, prev_label] if has_prev else None
+    for field, title, color in (("impressions", "Palabras clave con más impresiones", "#e9a15c"),
+                                ("clicks", "Palabras clave con más clics", BLOCK_COLORS["Captación"])):
+        top = q[q[field] > 0].sort_values(field, ascending=False).head(15)
+        if top.empty:
+            continue
+        rows = [(r["query"], int(r[field]), int(r[f"{field}_prev"]) if has_prev else None, color)
+                for _, r in top.iterrows()]
+        story.append(KeepTogether([P(title, "h2"), hbar_chart(rows, label_w=62 * mm, legend=legend)]))
+
+    # Reparto por intención
+    by_int = core.aggregate(cur_p, "intencion")
+    if not by_int.empty:
+        by_int["kw"] = by_int["intencion"].map(cur_p.groupby("intencion")["query"].nunique())
+        by_int["cuota"] = by_int["clicks"] / (by_int["clicks"].sum() or 1)
+        by_int = by_int.set_index("intencion").reindex([i for i in core.INTENCIONES if i in set(by_int["intencion"])])
+        story.append(KeepTogether([
+            P("Reparto por intención de búsqueda", "h2"),
+            data_table(by_int.reset_index(), [("intencion", "Intención", "text", 20), ("kw", "Palabras clave", "int", 12),
+                                              ("clicks", "Clics", "int", 10), ("cuota", "% clics", "pct", 10),
+                                              ("impressions", "Impr.", "int", 10), ("ctr", "CTR", "pct", 9),
+                                              ("position", "Pos.", "pos", 8)], has_prev),
+        ]))
+
+    near = q[(q["position"] >= 4) & (q["position"] <= 20)].sort_values("impressions", ascending=False).head(20)
+    if not near.empty:
+        story += [CondPageBreak(45 * mm), P("Oportunidades (posiciones 4 a 20)", "h2"),
+                  P("Ya están cerca de la primera página: subirlas unas posiciones suele traer más clics "
+                    "que trabajar palabras clave nuevas.", "note"), Spacer(1, 5),
+                  data_table(near, [("query", "Palabra clave", "text", 34), ("intencion", "Intención", "text", 12),
+                                    ("impressions", "Impr.", "int", 8), ("clicks", "Clics", "int", 7),
+                                    ("ctr", "CTR", "pct", 8), ("position", "Pos.", "pos", 6),
+                                    ("d_position", "Var. pos.", "dpos", 8)], has_prev)]
+
+    story += [CondPageBreak(45 * mm), P(f"Todas las palabras clave ({fmt_int(len(q))}, ordenadas por {order_by.lower()})", "h2"),
+              data_table(q, [("query", "Palabra clave", "text", 30), ("intencion", "Intención", "text", 12),
+                             ("clicks", "Clics", "int", 7), ("d_clicks", "Var. clics", "dint", 8),
+                             ("impressions", "Impr.", "int", 8), ("d_impressions", "Var. impr.", "dint", 8),
+                             ("ctr", "CTR", "pct", 7), ("position", "Pos.", "pos", 6),
+                             ("d_position", "Var. pos.", "dpos", 7)], has_prev),
+              Spacer(1, 10),
+              P("Transaccional: matrícula, precio, plazas, requisitos… Comercial: busca un ciclo o un centro. "
+                "Informativa: salidas, sueldo, qué es… En la variación de posición, un número negativo es una mejora.",
+                "note")]
+
+    return render(story, f"Palabras clave · {domain}{short_path(page, 55)} · {cur_label}", f"Palabras clave {domain}{path} {cur_label}")
